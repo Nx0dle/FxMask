@@ -7,7 +7,7 @@
 
 #import "FxMaskPlugIn.h"
 #import <IOSurface/IOSurfaceObjC.h>
-#import "TileableRemoteBrightnessShaderTypes.h"
+#import "ShaderTypes.h"
 #import "MetalDeviceCache.h"
 
 @implementation FxMaskPlugIn

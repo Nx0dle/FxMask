@@ -5,8 +5,8 @@
 //  Created by MotionVFX on 06/03/2024.
 //
 
-#ifndef TileableRemoteBrightnessShaderTypes_h
-#define TileableRemoteBrightnessShaderTypes_h
+#ifndef ShaderTypes_h
+#define ShaderTypes_h
 
 #import <simd/simd.h>
 
@@ -29,4 +29,4 @@ typedef struct Vertex2D {
 } Vertex2D;
 
 
-#endif /* TileableRemoteBrightnessShaderTypes_h */
+#endif

@@ -10,7 +10,7 @@
 
 using namespace metal;
 
-#include "TileableRemoteBrightnessShaderTypes.h"
+#include "ShaderTypes.h"
 
 typedef struct
 {
