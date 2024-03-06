@@ -74,10 +74,9 @@ fragment float4 fragmentShader(RasterizerData in [[stage_in]],
                                       min_filter::linear);
     
     // Sample the texture to obtain a color
-    half4 colorSample = colorTexture.sample(textureSampler, in.textureCoordinate);
-    const half hBrightness = static_cast<half>(*brightness);
-    colorSample.rgb = colorSample.rgb * hBrightness;
-    
+    const half4 sample = colorTexture.sample(textureSampler, in.textureCoordinate);
+    float4 result = float4(sample);
+
     // We return the color of the texture
-    return float4(colorSample);
+    return result;
 }

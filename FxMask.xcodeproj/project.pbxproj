@@ -183,12 +183,12 @@
 				050463BF2B9886FA00210B25 /* MetalDeviceCache.h */,
 				050463C32B9886FA00210B25 /* MetalDeviceCache.m */,
 				050463CB2B9886FA00210B25 /* FxMaskShader.metal */,
+				050463E52B98940F00210B25 /* FxMaskOSC.metal */,
 				050463CE2B9886FA00210B25 /* ShaderTypes.h */,
 				050463CF2B9886FA00210B25 /* main.m */,
 				050463D12B9886FA00210B25 /* Info.plist */,
 				050463D22B9886FA00210B25 /* InfoPlist.strings */,
 				050463D52B9886FA00210B25 /* Localizable.strings */,
-				050463E52B98940F00210B25 /* FxMaskOSC.metal */,
 			);
 			path = Plugin;
 			sourceTree = "<group>";

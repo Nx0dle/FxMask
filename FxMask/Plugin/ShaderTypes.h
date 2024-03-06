@@ -10,6 +10,13 @@
 
 #import <simd/simd.h>
 
+enum {
+    kLowerLeftID    = 1,
+    kUpperRightID   = 2,
+    kCircleCenter   = 3,
+    kCircleRadius   = 4
+};
+
 typedef enum BrightnessVertexInputIndex {
     BVI_Vertices        = 0,
     BVI_ViewportSize    = 1
@@ -28,5 +35,8 @@ typedef struct Vertex2D {
     vector_float2   textureCoordinate;
 } Vertex2D;
 
+typedef struct ShapeVertex {
+    vector_float2   position;
+} ShapeVertex;
 
 #endif

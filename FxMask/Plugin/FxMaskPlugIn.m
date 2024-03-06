@@ -10,6 +10,11 @@
 #import "ShaderTypes.h"
 #import "MetalDeviceCache.h"
 
+typedef struct Shapes {
+    FxPoint2D   lowerLeft;
+    FxPoint2D   upperRight;
+} Shapes;
+
 @implementation FxMaskPlugIn
 
 //---------------------------------------------------------
@@ -58,40 +63,39 @@
 
 - (BOOL)addParametersWithError:(NSError**)error
 {
-    id<FxParameterCreationAPI_v5>   paramAPI    = [_apiManager apiForProtocol:@protocol(FxParameterCreationAPI_v5)];
-    if (paramAPI == nil)
+    id<FxParameterCreationAPI_v5>   parmsApi;
+    
+    parmsApi = [_apiManager apiForProtocol:@protocol(FxParameterCreationAPI_v5)];
+    if (parmsApi == nil)
     {
-        NSDictionary*   userInfo    = @{
-                                        NSLocalizedDescriptionKey : @"Unable to obtain an FxPlug API Object"
-                                        };
-        if (error != NULL)
+        if (error != nil)
+        {
             *error = [NSError errorWithDomain:FxPlugErrorDomain
                                          code:kFxError_APIUnavailable
-                                     userInfo:userInfo];
+                                     userInfo:@{ NSLocalizedFailureReasonErrorKey :
+                                                     @"Unable to get the FxParameterCreationAPI_v5 in -addParametersWithError:" }];
+        }
         
         return NO;
     }
     
-    if (![paramAPI addFloatSliderWithName:@"Brightness"
-                              parameterID:1
-                             defaultValue:1.0
-                             parameterMin:0.0
-                             parameterMax:100.0
-                                sliderMin:0.0
-                                sliderMax:10.0
-                                    delta:0.1
-                           parameterFlags:kFxParameterFlag_DEFAULT])
-    {
-        NSDictionary*   userInfo    = @{
-                                        NSLocalizedDescriptionKey : @"Unable to add brightness slider"
-                                        };
-        if (error != NULL)
-            *error = [NSError errorWithDomain:FxPlugErrorDomain
-                                         code:kFxError_InvalidParameter
-                                     userInfo:userInfo];
-        
-        return NO;
-    }
+    NSBundle *bundle = [NSBundle bundleForClass:[self class]];
+    
+    [parmsApi addPointParameterWithName:[bundle localizedStringForKey:@"FxMask::Lower Left"
+                                                                value:nil
+                                                                table:nil]
+                            parameterID:kLowerLeftID
+                               defaultX:0.25
+                               defaultY:0.25
+                         parameterFlags:kFxParameterFlag_DEFAULT];
+    
+    [parmsApi addPointParameterWithName:[bundle localizedStringForKey:@"FxMask::Upper Right"
+                                                                value:nil
+                                                                table:nil]
+                            parameterID:kUpperRightID
+                               defaultX:0.5
+                               defaultY:0.5
+                         parameterFlags:kFxParameterFlag_DEFAULT];
     
     return YES;
 }
@@ -115,35 +119,40 @@
             quality:(FxQuality)qualityLevel
               error:(NSError**)error
 {
-    BOOL    succeeded = NO;
     id<FxParameterRetrievalAPI_v6>  paramGetAPI = [_apiManager apiForProtocol:@protocol(FxParameterRetrievalAPI_v6)];
-    if (paramGetAPI != nil)
+    
+    if (paramGetAPI == nil)
     {
-        double  brightness  = 1.0;
-        [paramGetAPI getFloatValue:&brightness
-                     fromParameter:1
-                            atTime:renderTime];
-        
-        *pluginState = [NSData dataWithBytes:&brightness
-                                      length:sizeof(brightness)];
-        
-        if (*pluginState != nil)
-        {
-            succeeded = YES;
-        }
-    }
-    else
-    {
-        if (error != NULL)
+        if (error != NULL) {
             *error = [NSError errorWithDomain:FxPlugErrorDomain
                                          code:kFxError_ThirdPartyDeveloperStart + 20
                                      userInfo:@{
-                                                NSLocalizedDescriptionKey :
+                    NSLocalizedDescriptionKey:
                                                     @"Unable to retrieve FxParameterRetrievalAPI_v6 in \
                                                     [-pluginStateAtTime:]" }];
+        }
+        return NO;
     }
     
-    return succeeded;
+    Shapes  shapeState  = {
+        { 0.0, 0.0 },
+        { 1.0, 1.0 }
+    };
+    
+    [paramGetAPI getXValue:&shapeState.lowerLeft.x
+                 YValue:&shapeState.lowerLeft.y
+          fromParameter:kLowerLeftID
+                 atTime:renderTime];
+    
+    [paramGetAPI getXValue:&shapeState.upperRight.x
+                 YValue:&shapeState.upperRight.y
+          fromParameter:kUpperRightID
+                 atTime:renderTime];
+    
+    *pluginState = [NSData dataWithBytes:&shapeState
+                                  length:sizeof(shapeState)];
+    
+    return YES;
 }
 
 //---------------------------------------------------------
@@ -164,18 +173,54 @@
                       atTime:(CMTime)renderTime
                        error:(NSError * _Nullable *)outError
 {
-    if (sourceImages.count < 1)
+    if (pluginState == nil)
     {
-        NSLog (@"No inputImages list");
+        if (outError != nil)
+        {
+            *outError = [NSError errorWithDomain:FxPlugErrorDomain
+                                            code:kFxError_InvalidParameter
+                                        userInfo:@{ NSLocalizedFailureReasonErrorKey : @"pluginState is nil in -destinationImageRect:" }];
+        }
         return NO;
     }
     
-    // In the case of a filter that only changed RGB values,
-    // the output rect is the same as the input rect.
-    *destinationImageRect = sourceImages [ 0 ].imagePixelBounds;
+    Shapes shapeState;
+    [pluginState getBytes:&shapeState
+                   length:sizeof(shapeState)];
+    
+    // Convert the source into image space
+    FxRect  srcRect = sourceImages [ 0 ].imagePixelBounds;
+    FxMatrix44* srcInvPixTrans  = sourceImages [ 0 ].inversePixelTransform;
+    FxPoint2D   srcLowerLeft    = { srcRect.left, srcRect.bottom };
+    FxPoint2D   srcUpperRight   = { srcRect.right, srcRect.top };
+    srcLowerLeft = [srcInvPixTrans transform2DPoint:srcLowerLeft];
+    srcUpperRight = [srcInvPixTrans transform2DPoint:srcUpperRight];
+    CGSize  srcImageSize    = CGSizeMake(srcUpperRight.x - srcLowerLeft.x, srcUpperRight.y - srcLowerLeft.y);
+    
+    // Union the various objects
+    CGRect  imageBounds = CGRectMake(srcLowerLeft.x, srcLowerLeft.y, srcImageSize.width, srcImageSize.height);
+    CGRect  rectBounds  = CGRectMake(shapeState.lowerLeft.x * srcImageSize.width,
+                                     shapeState.lowerLeft.y * srcImageSize.height,
+                                     (shapeState.upperRight.x - shapeState.lowerLeft.x) * srcImageSize.width,
+                                     (shapeState.upperRight.y - shapeState.lowerLeft.y) * srcImageSize.height);
+    rectBounds = CGRectOffset(rectBounds, srcLowerLeft.x, srcLowerLeft.y);
+    
+    imageBounds = CGRectUnion(imageBounds, rectBounds);
+    
+    // Convert back into pixel space
+    FxPoint2D   dstLowerLeft    = imageBounds.origin;
+    FxPoint2D   dstUpperRight   = { imageBounds.origin.x + imageBounds.size.width, imageBounds.origin.y + imageBounds.size.height };
+    
+    FxMatrix44* dstPixelTrans   = destinationImage.pixelTransform;
+    dstLowerLeft = [dstPixelTrans transform2DPoint:dstLowerLeft];
+    dstUpperRight = [dstPixelTrans transform2DPoint:dstUpperRight];
+    
+    destinationImageRect->left = floor(dstLowerLeft.x);
+    destinationImageRect->bottom = floor(dstLowerLeft.y);
+    destinationImageRect->right = ceil(dstUpperRight.x);
+    destinationImageRect->top = ceil(dstUpperRight.y);
     
     return YES;
-    
 }
 
 //---------------------------------------------------------
@@ -194,7 +239,17 @@
                 atTime:(CMTime)renderTime
                  error:(NSError * _Nullable *)outError
 {
-    // Since this is a color-only filter, the input tile will be the same size as the output tile
+    if (pluginState == nil)
+    {
+        if (outError != nil)
+        {
+            *outError = [NSError errorWithDomain:FxPlugErrorDomain
+                                            code:kFxError_InvalidParameter
+                                        userInfo:@{ NSLocalizedFailureReasonErrorKey : @"pluginState is nil in -destinationImageRect:" }];
+        }
+        return NO;
+    }
+    
     *sourceTileRect = destinationTileRect;
     
     return YES;
@@ -231,9 +286,9 @@
     
     // This is where you would access parameter values and other info about the source tile
     // from the pluginState.
-    double  brightness = 0.0;
-    [pluginState getBytes:&brightness
-                   length:sizeof(brightness)];
+    Shapes shapeState;
+    [pluginState getBytes:&shapeState
+                   length:sizeof(shapeState)];
     
     // Set up the renderer, in this case we are using Metal.
     
@@ -294,11 +349,6 @@
     
     [commandEncoder setFragmentTexture:inputTexture
                                atIndex:BTI_InputImage];
-    
-    float   fragmentBrightness = (float)brightness;
-    [commandEncoder setFragmentBytes:&fragmentBrightness
-                              length:sizeof(fragmentBrightness)
-                             atIndex:BFI_Brightness];
     
     [commandEncoder drawPrimitives:MTLPrimitiveTypeTriangleStrip
                        vertexStart:0
