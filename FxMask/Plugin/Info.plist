@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>FxMaskXPCService</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>XPC!</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>NSHumanReadableCopyright</key>
+	<string></string>
+	<key>PlugInKit</key>
+	<dict>
+		<key>Attributes</key>
+		<dict>
+			<key>com.apple.protocol</key>
+			<string>FxPlug</string>
+			<key>com.apple.version</key>
+			<string>1.1</string>
+		</dict>
+		<key>PrincipalClass</key>
+		<string>FxPrincipal</string>
+		<key>Protocol</key>
+		<string>PROXPCProtocol</string>
+		<key>Subsystems</key>
+		<array>
+			<string>NSViewService_PKSubsystem</string>
+		</array>
+	</dict>
+	<key>ProPlugDictionaryVersion</key>
+	<string>1.0</string>
+	<key>ProPlugDynamicRegistration</key>
+	<false/>
+	<key>ProPlugPlugInGroupList</key>
+	<array>
+		<dict>
+			<key>groupName</key>
+			<string>FxMask Group</string>
+			<key>uuid</key>
+			<string>EC4FC84F-7A68-4201-BD3E-E40E0239F058</string>
+		</dict>
+	</array>
+	<key>ProPlugPlugInList</key>
+	<array>
+		<dict>
+			<key>className</key>
+			<string>FxMaskPlugIn</string>
+			<key>displayName</key>
+			<string>FxMask::FxPlug Name</string>
+			<key>group</key>
+			<string>EC4FC84F-7A68-4201-BD3E-E40E0239F058</string>
+			<key>infoString</key>
+			<string>FxMask::FxPlug Description</string>
+			<key>protocolNames</key>
+			<array>
+				<string>FxFilter</string>
+			</array>
+			<key>uuid</key>
+			<string>4C2ABB63-B2A5-45F9-8000-809A6E81B409</string>
+			<key>version</key>
+			<string>1.0</string>
+		</dict>
+	</array>
+	<key>XPCService</key>
+	<dict>
+		<key>ServiceType</key>
+		<string>Application</string>
+		<key>JoinExistingSession</key>
+		<true/>
+		<key>RunLoopType</key>
+		<string>_NSApplicationMain</string>
+		<key>_AdditionalSubServices</key>
+		<dict>
+			<key>viewbridge</key>
+			<true/>
+		</dict>
+	</dict>
+</dict>
+</plist>
