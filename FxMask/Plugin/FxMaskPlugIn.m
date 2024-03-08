@@ -10,10 +10,11 @@
 #import "ShaderTypes.h"
 #import "MetalDeviceCache.h"
 
-typedef struct Shapes {
+typedef struct Parameters {
     FxPoint2D   upperLeft;
     FxPoint2D   lowerRight;
-} Shapes;
+    double radius;
+} Parameters;
 
 @implementation FxMaskPlugIn
 
@@ -97,6 +98,16 @@ typedef struct Shapes {
                                defaultY:0.5
                          parameterFlags:kFxParameterFlag_DEFAULT];
     
+    [parmsApi addFloatSliderWithName:@"Blur Ammount"
+                         parameterID:3
+                        defaultValue:5.0
+                        parameterMin:1.0
+                        parameterMax:100.0
+                           sliderMin:1.0
+                           sliderMax:25.0
+                               delta:0.01
+                      parameterFlags:kFxParameterFlag_DEFAULT];
+    
     return YES;
 }
 
@@ -134,10 +145,12 @@ typedef struct Shapes {
         return NO;
     }
     
-    Shapes  shapeState  = {
+    Parameters shapeState  = {
         { 1.0, 1.0 },
-        { 1.0, 1.0 }
+        { 1.0, 1.0 },
     };
+    
+    shapeState.radius = 1.0;
     
     [paramGetAPI getXValue:&shapeState.upperLeft.x
                  YValue:&shapeState.upperLeft.y
@@ -148,6 +161,10 @@ typedef struct Shapes {
                  YValue:&shapeState.lowerRight.y
           fromParameter:kUpperRightID
                  atTime:renderTime];
+    
+    [paramGetAPI getFloatValue:&shapeState.radius
+                 fromParameter:3
+                        atTime:renderTime];
     
     *pluginState = [NSData dataWithBytes:&shapeState
                                   length:sizeof(shapeState)];
@@ -184,7 +201,7 @@ typedef struct Shapes {
         return NO;
     }
     
-    Shapes shapeState;
+    Parameters shapeState;
     [pluginState getBytes:&shapeState
                    length:sizeof(shapeState)];
     
@@ -223,6 +240,9 @@ typedef struct Shapes {
     return YES;
 }
 
+#pragma mark -
+#pragma mark parameterChanged method example
+
 //- (BOOL)parameterChanged:(UInt32)paramID atTime:(CMTime)time error:(NSError * _Nullable *)error
 //{
 //    id<FxParameterRetrievalAPI_v6>  paramGetAPI = [_apiManager apiForProtocol:@protocol(FxParameterRetrievalAPI_v6)];
@@ -251,6 +271,8 @@ typedef struct Shapes {
 // to render the given output tile.
 //---------------------------------------------------------
 
+#pragma mark -
+
 - (BOOL)sourceTileRect:(FxRect *)sourceTileRect
       sourceImageIndex:(NSUInteger)sourceImageIndex
           sourceImages:(NSArray<FxImageTile *> *)sourceImages
@@ -275,6 +297,9 @@ typedef struct Shapes {
     
     return YES;
 }
+
+#pragma mark -
+#pragma mark Rendering
 
 //---------------------------------------------------------
 // renderDestinationImage:sourceImages:pluginState:atTime:error:
@@ -307,12 +332,11 @@ typedef struct Shapes {
     
     // This is where you would access parameter values and other info about the source tile
     // from the pluginState.
-    Shapes shapeState;
+    Parameters shapeState;
     [pluginState getBytes:&shapeState
                    length:sizeof(shapeState)];
     
     // Set up the renderer, in this case we are using Metal.
-    
     MetalDeviceCache*  deviceCache     = [MetalDeviceCache deviceCache];
     MTLPixelFormat     pixelFormat     = [MetalDeviceCache MTLPixelFormatForImageTile:destinationImage];
     id<MTLCommandQueue> commandQueue   = [deviceCache commandQueueWithRegistryID:sourceImages[0].deviceRegistryID
@@ -327,22 +351,29 @@ typedef struct Shapes {
     [commandBuffer enqueue];
     
     id<MTLTexture>  inputTexture    = [sourceImages[0] metalTextureForDevice:[deviceCache deviceWithRegistryID:sourceImages[0].deviceRegistryID]];
+    
     id<MTLTexture>  outputTexture   = [destinationImage metalTextureForDevice:[deviceCache deviceWithRegistryID:destinationImage.deviceRegistryID]];
+
+    // Set texture descriptor for textures between in and out
+    MTLTextureDescriptor *additionalTexDescriptor = [MTLTextureDescriptor new];
+    additionalTexDescriptor.textureType = MTLTextureType2D;
+    additionalTexDescriptor.width = inputTexture.width;
+    additionalTexDescriptor.height = inputTexture.height;
+    additionalTexDescriptor.pixelFormat = MTLPixelFormatRGBA16Float;
+    additionalTexDescriptor.usage = MTLTextureUsageRenderTarget |
+                            MTLTextureUsageShaderRead;
     
-    id<MTLTexture> firstPassTexture;
+    id<MTLTexture> secondPassTexture = [commandBuffer.device newTextureWithDescriptor:additionalTexDescriptor];
     
-    MTLRenderPassColorAttachmentDescriptor* colorAttachmentDescriptor   = [[MTLRenderPassColorAttachmentDescriptor alloc] init];
-    colorAttachmentDescriptor.texture = outputTexture;
-    colorAttachmentDescriptor.clearColor = MTLClearColorMake(1.0, 0.5, 0.0, 1.0);
-    colorAttachmentDescriptor.loadAction = MTLLoadActionClear;
-    MTLRenderPassDescriptor*    renderPassDescriptor    = [MTLRenderPassDescriptor renderPassDescriptor];
-    renderPassDescriptor.colorAttachments [ 0 ] = colorAttachmentDescriptor;
-    id<MTLRenderCommandEncoder>   commandEncoder  = [commandBuffer renderCommandEncoderWithDescriptor:renderPassDescriptor];
+    // Middle texture pixel format
+    MTLPixelFormat secondPassPixFormat = secondPassTexture.pixelFormat;
     
-    // Rendering
     float   outputWidth     = (float)(destinationImage.tilePixelBounds.right - destinationImage.tilePixelBounds.left);
+    
     float   outputHeight    = (float)(destinationImage.tilePixelBounds.top - destinationImage.tilePixelBounds.bottom);
-    Vertex2D    vertices[]  = {
+    
+    // Viewport vertices
+    Vertex2D viewportVertices[]  = {
         { {  outputWidth / 2.0, -outputHeight / 2.0 }, { 1.0, 1.0 } },
         { { -outputWidth / 2.0, -outputHeight / 2.0 }, { 0.0, 1.0 } },
         { {  outputWidth / 2.0,  outputHeight / 2.0 }, { 1.0, 0.0 } },
@@ -352,72 +383,143 @@ typedef struct Shapes {
     MTLViewport viewport    = {
         0, 0, outputWidth, outputHeight, -1.0, 1.0
     };
-    [commandEncoder setViewport:viewport];
     
+    // First pass rendering input image to output texture
     {
-        id<MTLRenderPipelineState>  pipelineState  = [deviceCache pipelineStateWithRegistryID:sourceImages[0].deviceRegistryID pixelFormat:pixelFormat];
-        [commandEncoder setRenderPipelineState:pipelineState];
-        
-        [commandEncoder setVertexBytes:vertices
-                                length:sizeof(vertices)
-                               atIndex:BVI_Vertices];
-        
-        simd_uint2  viewportSize = {
-            (unsigned int)(outputWidth),
-            (unsigned int)(outputHeight)
-        };
-        [commandEncoder setVertexBytes:&viewportSize
-                                length:sizeof(viewportSize)
-                               atIndex:BVI_ViewportSize];
-        
-        [commandEncoder setFragmentTexture:inputTexture
-                                   atIndex:BTI_InputImage];
-        
-        [commandEncoder drawPrimitives:MTLPrimitiveTypeTriangleStrip
-                           vertexStart:0
-                           vertexCount:4];
+        @autoreleasepool {
+            
+            MTLRenderPassDescriptor* renderPassDescriptorCopyTextureToFinalPass = [MTLRenderPassDescriptor renderPassDescriptor];
+            renderPassDescriptorCopyTextureToFinalPass.colorAttachments[0].texture = outputTexture;
+            renderPassDescriptorCopyTextureToFinalPass.colorAttachments[0].loadAction = MTLLoadActionClear;
+            renderPassDescriptorCopyTextureToFinalPass.colorAttachments[0].storeAction = MTLStoreActionStore;
+            
+            id<MTLRenderCommandEncoder> commandEncoderCopyInputToOutput = [commandBuffer renderCommandEncoderWithDescriptor:renderPassDescriptorCopyTextureToFinalPass];
+            
+            id<MTLRenderPipelineState>  pipelineState  = [deviceCache pipelineStateWithRegistryID:sourceImages[0].deviceRegistryID pixelFormat:secondPassPixFormat];
+            
+            [commandEncoderCopyInputToOutput setViewport:viewport];
+            
+            [commandEncoderCopyInputToOutput setRenderPipelineState:pipelineState];
+            
+            [commandEncoderCopyInputToOutput setVertexBytes:viewportVertices
+                                    length:sizeof(viewportVertices)
+                                   atIndex:BVI_Vertices];
+            
+            simd_uint2  viewportSize = {
+                (unsigned int)(outputWidth),
+                (unsigned int)(outputHeight)
+            };
+            [commandEncoderCopyInputToOutput setVertexBytes:&viewportSize
+                                    length:sizeof(viewportSize)
+                                   atIndex:BVI_ViewportSize];
+            
+            [commandEncoderCopyInputToOutput setFragmentTexture:inputTexture
+                                       atIndex:BTI_InputImage];
+            
+            [commandEncoderCopyInputToOutput drawPrimitives:MTLPrimitiveTypeTriangleStrip
+                               vertexStart:0
+                               vertexCount:4];
+            
+            [commandEncoderCopyInputToOutput endEncoding];
+            
+        }
     }
     
+    // Second pass drawing rectangle with expanded Y axix borders and applying gaussian blur on X axis, rendering from input image to second pass texture
     {
-        id<MTLRenderPipelineState>  pipelineStateShape  = [deviceCache maskPipelineStateWithRegistryID:sourceImages[0].deviceRegistryID pixelFormat:pixelFormat];
-        [commandEncoder setRenderPipelineState:pipelineStateShape];
-        
-        // Mask vertices and default texCoords
-        Vertex2D quadVertices[] = {
-            {{  (shapeState.upperLeft.x),   (shapeState.upperLeft.y)},  {0.0, 1.0}},
-            {{  (shapeState.upperLeft.x),   (shapeState.lowerRight.y)}, {0.0, 0.0}},
-            {{  (shapeState.lowerRight.x),  (shapeState.upperLeft.y)},  {1.0, 1.0}},
-            {{  (shapeState.lowerRight.x),  (shapeState.lowerRight.y)}, {1.0, 0.0}}
-        };
-        
-        [commandEncoder setVertexBytes:quadVertices
-                                length:sizeof(quadVertices)
-                               atIndex:2];
-        
-        simd_uint2  viewportSize = {
-            (unsigned int)(outputWidth),
-            (unsigned int)(outputHeight)
-        };
-        
-        [commandEncoder setFragmentBytes:&viewportSize
-                                length:sizeof(viewportSize)
-                               atIndex:BVI_ViewportSize];
-        
-        [commandEncoder setFragmentTexture:inputTexture
-                                   atIndex:BTI_InputImage];
-        
-        [commandEncoder drawPrimitives:MTLPrimitiveTypeTriangleStrip
-                           vertexStart:0
-                           vertexCount:4];
-        
-        [commandEncoder endEncoding];
+        @autoreleasepool {
+            
+            // Expanded rectangle borders on Y axis to fill Y axis blur gap
+            Vertex2D quadVerticesOffset[] = {
+                {{(shapeState.upperLeft.x),   (shapeState.upperLeft.y + shapeState.radius)},  {0.0, 1.0}},
+                {{(shapeState.upperLeft.x),   (shapeState.lowerRight.y - shapeState.radius)}, {0.0, 0.0}},
+                {{(shapeState.lowerRight.x),  (shapeState.upperLeft.y + shapeState.radius)},  {1.0, 1.0}},
+                {{(shapeState.lowerRight.x),  (shapeState.lowerRight.y - shapeState.radius)}, {1.0, 0.0}}
+            };
+            
+            MTLRenderPassDescriptor* renderPassDescriptorSecondPass = [MTLRenderPassDescriptor renderPassDescriptor];
+            renderPassDescriptorSecondPass.colorAttachments[0].texture = secondPassTexture;
+            renderPassDescriptorSecondPass.colorAttachments[0].loadAction = MTLLoadActionLoad;
+            renderPassDescriptorSecondPass.colorAttachments[0].storeAction = MTLStoreActionStore;
+            
+            id<MTLRenderCommandEncoder>  commandEncoderSecondPass  = [commandBuffer renderCommandEncoderWithDescriptor:renderPassDescriptorSecondPass];
+            
+            id<MTLRenderPipelineState>  pipelineStateShape  = [deviceCache maskPipelineStateWithRegistryID:sourceImages[0].deviceRegistryID pixelFormat:secondPassPixFormat];
+            
+            [commandEncoderSecondPass setViewport:viewport];
+            
+            [commandEncoderSecondPass setRenderPipelineState:pipelineStateShape];
+            
+            [commandEncoderSecondPass setVertexBytes:quadVerticesOffset
+                                    length:sizeof(quadVerticesOffset)
+                                   atIndex:2];
+            
+            float fragmentRadius = (float)shapeState.radius;
+            [commandEncoderSecondPass setFragmentBytes:&fragmentRadius
+                                    length:sizeof(fragmentRadius)
+                                   atIndex:3];
+            
+            [commandEncoderSecondPass setFragmentTexture:inputTexture
+                                       atIndex:0];
+            
+            [commandEncoderSecondPass drawPrimitives:MTLPrimitiveTypeTriangleStrip
+                               vertexStart:0
+                               vertexCount:4];
+            
+            [commandEncoderSecondPass endEncoding];
+            
+        }
+    }
+    
+    // Final pass drawing in the main size rectangle gaussian blur on Y axis
+    {
+        @autoreleasepool {
+            
+            // Main size rectangle on final pass
+            Vertex2D quadVertices[] = {
+                {{  (shapeState.upperLeft.x),   (shapeState.upperLeft.y)},  {0.0, 1.0}},
+                {{  (shapeState.upperLeft.x),   (shapeState.lowerRight.y)}, {0.0, 0.0}},
+                {{  (shapeState.lowerRight.x),  (shapeState.upperLeft.y)},  {1.0, 1.0}},
+                {{  (shapeState.lowerRight.x),  (shapeState.lowerRight.y)}, {1.0, 0.0}}
+            };
+            
+            MTLRenderPassDescriptor* renderPassDescriptorFinalPass = [MTLRenderPassDescriptor renderPassDescriptor];
+            renderPassDescriptorFinalPass.colorAttachments[0].texture = outputTexture;
+            renderPassDescriptorFinalPass.colorAttachments[0].loadAction = MTLLoadActionLoad;
+            renderPassDescriptorFinalPass.colorAttachments[0].storeAction = MTLStoreActionStore;
+            
+            id<MTLRenderCommandEncoder>   commandEncoderFinalPass  = [commandBuffer renderCommandEncoderWithDescriptor:renderPassDescriptorFinalPass];
+            
+            id<MTLRenderPipelineState>  pipelineStateShapeSecondPass  = [deviceCache maskSecondPassPipelineStateWithRegistryID:sourceImages[0].deviceRegistryID pixelFormat:secondPassPixFormat];
+            
+            [commandEncoderFinalPass setViewport:viewport];
+            
+            [commandEncoderFinalPass setRenderPipelineState:pipelineStateShapeSecondPass];
+            
+            [commandEncoderFinalPass setVertexBytes:quadVertices
+                                    length:sizeof(quadVertices)
+                                   atIndex:2];
+            
+            float fragmentRadius = (float)shapeState.radius;
+            [commandEncoderFinalPass setFragmentBytes:&fragmentRadius
+                                    length:sizeof(fragmentRadius)
+                                   atIndex:4];
+            
+            [commandEncoderFinalPass setFragmentTexture:secondPassTexture
+                                       atIndex:1];
+            
+            [commandEncoderFinalPass drawPrimitives:MTLPrimitiveTypeTriangleStrip
+                               vertexStart:0
+                               vertexCount:4];
+            
+            [commandEncoderFinalPass endEncoding];
+            
+        }
     }
     
     [commandBuffer commit];
     
     [commandBuffer waitUntilCompleted];
-    
-    [colorAttachmentDescriptor release];
     
     [deviceCache returnCommandQueueToCache:commandQueue];
     

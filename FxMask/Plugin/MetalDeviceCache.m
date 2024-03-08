@@ -18,6 +18,7 @@ static MetalDeviceCache*   gDeviceCache    = nil;
 @property (readonly)    id<MTLDevice>                           gpuDevice;
 @property (readonly)    id<MTLRenderPipelineState>              pipelineState;
 @property (readonly)    id<MTLRenderPipelineState>              pipelineStateMask;
+@property (readonly)    id<MTLRenderPipelineState>              pipelineStateMaskSecondPass;
 @property (retain)      NSMutableArray<NSMutableDictionary*>*   commandQueueCache;
 @property (readonly)    NSLock*                                 commandQueueCacheLock;
 @property (readonly)    MTLPixelFormat                          pixelFormat;
@@ -55,6 +56,9 @@ static MetalDeviceCache*   gDeviceCache    = nil;
             [_commandQueueCache addObject:commandDict];
         }
         
+#pragma mark -
+#pragma mark Pipeline setup
+        
         // Load all the shader files with a .metal file extension in the project
         id<MTLLibrary> defaultLibrary = [[_gpuDevice newDefaultLibrary] autorelease];
         
@@ -75,19 +79,27 @@ static MetalDeviceCache*   gDeviceCache    = nil;
         pipelineStateDescriptor.label = @"Simple Pipeline";
         pipelineStateDescriptor.vertexFunction = vertexFunction;
         pipelineStateDescriptor.fragmentFunction = fragmentFunction;
-        pipelineStateDescriptor.colorAttachments[0].pixelFormat = pixFormat;
+        pipelineStateDescriptor.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA16Float;
         _pixelFormat = pixFormat;
         
         NSError*    error = nil;
         _pipelineState = [_gpuDevice newRenderPipelineStateWithDescriptor:pipelineStateDescriptor
                                                                               error:&error];
-        
+        // First pass in second render
         pipelineStateDescriptor.label = @"Simple Pipeline for mask";
         pipelineStateDescriptor.vertexFunction = maskVertexFunction;
         pipelineStateDescriptor.fragmentFunction = maskFragmentFunction;
-        pipelineStateDescriptor.colorAttachments[0].pixelFormat = pixFormat;
+        pipelineStateDescriptor.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA16Float;
         
         _pipelineStateMask = [_gpuDevice newRenderPipelineStateWithDescriptor:pipelineStateDescriptor
+                                                                              error:&error];
+        // Second pass in third (final) render
+        pipelineStateDescriptor.label = @"Simple Pipeline for mask second pass";
+        pipelineStateDescriptor.vertexFunction = maskVertexFunction;
+        pipelineStateDescriptor.fragmentFunction = maskSecondFragmentFunction;
+        pipelineStateDescriptor.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA16Float;
+        
+        _pipelineStateMaskSecondPass = [_gpuDevice newRenderPipelineStateWithDescriptor:pipelineStateDescriptor
                                                                               error:&error];
         
         if (error != nil)
@@ -250,6 +262,9 @@ static MetalDeviceCache*   gDeviceCache    = nil;
     [super dealloc];
 }
 
+#pragma mark -
+#pragma mark Cache settings
+
 - (id<MTLDevice>)deviceWithRegistryID:(uint64_t)registryID
 {
     for (MetalDeviceCacheItem* nextCacheItem in deviceCaches)
@@ -333,6 +348,44 @@ static MetalDeviceCache*   gDeviceCache    = nil;
         {
             [deviceCaches addObject:newCacheItem];
             result = newCacheItem.pipelineStateMask;
+        }
+    }
+    [devices release];
+    return result;
+}
+
+- (id<MTLRenderPipelineState>)maskSecondPassPipelineStateWithRegistryID:(uint64_t)registryID
+                                              pixelFormat:(MTLPixelFormat)pixFormat
+{
+    for (MetalDeviceCacheItem* nextCacheItem in deviceCaches)
+    {
+        if ((nextCacheItem.gpuDevice.registryID == registryID)  &&
+            (nextCacheItem.pixelFormat == pixFormat))
+        {
+            return nextCacheItem.pipelineStateMaskSecondPass;
+        }
+    }
+    // Didn't find one, so create one with the right settings
+    NSArray<id<MTLDevice>>* devices = MTLCopyAllDevices();
+    id<MTLDevice>   device  = nil;
+    for (id<MTLDevice> nextDevice in devices)
+    {
+        if (nextDevice.registryID == registryID)
+        {
+            device = nextDevice;
+        }
+    }
+    
+    id<MTLRenderPipelineState>  result  = nil;
+    if (device != nil)
+    {
+        MetalDeviceCacheItem*   newCacheItem    = [[[MetalDeviceCacheItem alloc] initWithDevice:device
+                                                                                    pixelFormat:pixFormat]
+                                                    autorelease];
+        if (newCacheItem != nil)
+        {
+            [deviceCaches addObject:newCacheItem];
+            result = newCacheItem.pipelineStateMaskSecondPass;
         }
     }
     [devices release];

@@ -65,7 +65,7 @@ vertexShader(uint vertexID [[vertex_id]],
 // Fragment function
 fragment float4 fragmentShader(RasterizerData in [[stage_in]],
                                texture2d<half> colorTexture [[ texture(BTI_InputImage) ]],
-                               constant float* brightness [[ buffer(BFI_Brightness) ]])
+                               constant float &sigma [[buffer(3)]])
 {
     constexpr sampler textureSampler (mag_filter::linear,
                                       min_filter::linear);
@@ -80,6 +80,7 @@ fragment float4 fragmentShader(RasterizerData in [[stage_in]],
 #pragma mark -
 #pragma mark Mask shaders
 
+// Vertex shader for maping rectangle texture from viewport texture
 vertex RasterizerData
 maskVertexShader(uint vertexID [[vertex_id]],
              constant Vertex2D *vertexArray [[buffer(2)]],
@@ -99,71 +100,58 @@ maskVertexShader(uint vertexID [[vertex_id]],
     return out;
 }
 
+// Fragment shader for first gaussian blur pass (X axis)
 fragment float4 maskFragmentShader(RasterizerData in [[stage_in]],
-                               texture2d<half> colorTexture [[ texture(BTI_InputImage) ]],
-                               constant float* brightness [[ buffer(BFI_Brightness) ]],
-                                constant vector_uint2 *viewportSizePointer [[buffer(BVI_ViewportSize)]])
+                                      texture2d<float> texture [[texture(0)]],
+                                   constant float &sigma [[buffer(3)]])
 {
-    constexpr sampler textureSampler (mag_filter::linear,
-                                      min_filter::linear);
-    
-    // Sample the texture to obtain a color
-    const half4 sample = colorTexture.sample(textureSampler, in.textureCoordinate);
-    float4 result = float4(sample);
+    sampler simpleSampler(mip_filter::linear,
+                          mag_filter::linear,
+                          min_filter::linear,
+                          address::mirrored_repeat);
 
-    // We return the color of the texture
-    return 1 - result;
+    // Sample data from the texture.
+    float4 colorSample;
+
+    float4 color = float4(0.0);
+    float radius = 3.0 * sigma, weightSum = 0.0, x = 0.0;
+
+    for (int y = -radius; y <= radius; y++) {
+        float2 offset = float2(y, x) / float2(texture.get_height(), texture.get_width());
+        float weight = exp(-(y * y) / (2.0 * sigma * sigma));
+        color += texture.sample(simpleSampler, in.textureCoordinate.xy + offset) * weight;
+        weightSum += weight;
+    }
+
+    colorSample = color / weightSum;
+
+    return colorSample;
 }
 
-// Gauss blur shaders
-//fragment float4 textureFirstGaussShader(TexturePipelineRasterizerData in      [[stage_in]],
-//                                      texture2d<float>              texture [[texture(0)]])
-//{
-//    sampler simpleSampler(mip_filter::linear,
-//                          mag_filter::linear,
-//                          min_filter::linear,
-//                          address::mirrored_repeat);
-//
-//    // Sample data from the texture.
-//    float4 colorSample;
-//
-//    float4 color = float4(0.0);
-//    float sigma = 10.0, radius = 3.0 * sigma, weightSum = 0.0, x = 0.0;
-//
-//    for (int y = -radius; y <= radius; y++) {
-//        float2 offset = float2(y, x) / float2(texture.get_height(), texture.get_width());
-//        float weight = exp(-(y * y) / (2.0 * sigma * sigma));
-//        color += texture.sample(simpleSampler, in.texcoord.xy + offset) * weight;
-//        weightSum += weight;
-//    }
-//
-//    colorSample = color / weightSum;
-//
-//    return colorSample;
-//}
-//
-//fragment float4 textureSecondGaussShader(TexturePipelineRasterizerData in      [[stage_in]],
-//                                      texture2d<float>              texture [[texture(1)]])
-//{
-//    sampler simpleSampler(mip_filter::linear,
-//                          mag_filter::linear,
-//                          min_filter::linear,
-//                          address::mirrored_repeat);
-//
-//    // Sample data from the texture.
-//    float4 colorSample;
-//
-//    float4 color = float4(0.0);
-//    float sigma = 10.0, radius = 3.0 * sigma, weightSum = 0.0, y = 0.0;
-//
-//    for (int x = -radius; x <= radius; x++) {
-//        float2 offset = float2(y, x) / float2(texture.get_height(), texture.get_width());
-//        float weight = exp(-(x * x) / (2.0 * sigma * sigma));
-//        color += texture.sample(simpleSampler, in.texcoord.xy + offset) * weight;
-//        weightSum += weight;
-//    }
-//
-//    colorSample = color / weightSum;
-//
-//    return colorSample;
-//}
+// Fragment shader for second gaussian blur pass (Y axis)
+fragment float4 maskSecondFragmentShader(RasterizerData in [[stage_in]],
+                                      texture2d<float> texture [[texture(1)]],
+                                         constant float &sigma [[buffer(4)]])
+{
+    sampler simpleSampler(mip_filter::linear,
+                          mag_filter::linear,
+                          min_filter::linear,
+                          address::mirrored_repeat);
+
+    // Sample data from the texture.
+    float4 colorSample;
+
+    float4 color = float4(0.0);
+    float radius = 3.0 * sigma, weightSum = 0.0, y = 0.0;
+
+    for (int x = -radius; x <= radius; x++) {
+        float2 offset = float2(y, x) / float2(texture.get_height(), texture.get_width());
+        float weight = exp(-(x * x) / (2.0 * sigma * sigma));
+        color += texture.sample(simpleSampler, in.textureCoordinate.xy + offset) * weight;
+        weightSum += weight;
+    }
+
+    colorSample = color / weightSum;
+
+    return colorSample;
+}
