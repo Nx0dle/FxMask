@@ -17,6 +17,7 @@ static MetalDeviceCache*   gDeviceCache    = nil;
 
 @property (readonly)    id<MTLDevice>                           gpuDevice;
 @property (readonly)    id<MTLRenderPipelineState>              pipelineState;
+@property (readonly)    id<MTLRenderPipelineState>              pipelineStateMask;
 @property (retain)      NSMutableArray<NSMutableDictionary*>*   commandQueueCache;
 @property (readonly)    NSLock*                                 commandQueueCacheLock;
 @property (readonly)    MTLPixelFormat                          pixelFormat;
@@ -63,8 +64,14 @@ static MetalDeviceCache*   gDeviceCache    = nil;
         // Load the fragment function from the library
         id<MTLFunction> fragmentFunction = [[defaultLibrary newFunctionWithName:@"fragmentShader"] autorelease];
         
+        id<MTLFunction> maskVertexFunction = [[defaultLibrary newFunctionWithName:@"maskVertexShader"] autorelease];
+        id<MTLFunction> maskFragmentFunction = [[defaultLibrary newFunctionWithName:@"maskFragmentShader"] autorelease];
+        
+        id<MTLFunction> maskSecondFragmentFunction = [[defaultLibrary newFunctionWithName:@"maskSecondFragmentShader"] autorelease];
+        
         // Configure a pipeline descriptor that is used to create a pipeline state
         MTLRenderPipelineDescriptor *pipelineStateDescriptor = [[[MTLRenderPipelineDescriptor alloc] init] autorelease];
+        
         pipelineStateDescriptor.label = @"Simple Pipeline";
         pipelineStateDescriptor.vertexFunction = vertexFunction;
         pipelineStateDescriptor.fragmentFunction = fragmentFunction;
@@ -74,6 +81,15 @@ static MetalDeviceCache*   gDeviceCache    = nil;
         NSError*    error = nil;
         _pipelineState = [_gpuDevice newRenderPipelineStateWithDescriptor:pipelineStateDescriptor
                                                                               error:&error];
+        
+        pipelineStateDescriptor.label = @"Simple Pipeline for mask";
+        pipelineStateDescriptor.vertexFunction = maskVertexFunction;
+        pipelineStateDescriptor.fragmentFunction = maskFragmentFunction;
+        pipelineStateDescriptor.colorAttachments[0].pixelFormat = pixFormat;
+        
+        _pipelineStateMask = [_gpuDevice newRenderPipelineStateWithDescriptor:pipelineStateDescriptor
+                                                                              error:&error];
+        
         if (error != nil)
         {
             NSLog (@"Error generating brightness pipeline state: %@", error);
@@ -279,6 +295,44 @@ static MetalDeviceCache*   gDeviceCache    = nil;
         {
             [deviceCaches addObject:newCacheItem];
             result = newCacheItem.pipelineState;
+        }
+    }
+    [devices release];
+    return result;
+}
+
+- (id<MTLRenderPipelineState>)maskPipelineStateWithRegistryID:(uint64_t)registryID
+                                              pixelFormat:(MTLPixelFormat)pixFormat
+{
+    for (MetalDeviceCacheItem* nextCacheItem in deviceCaches)
+    {
+        if ((nextCacheItem.gpuDevice.registryID == registryID)  &&
+            (nextCacheItem.pixelFormat == pixFormat))
+        {
+            return nextCacheItem.pipelineStateMask;
+        }
+    }
+    // Didn't find one, so create one with the right settings
+    NSArray<id<MTLDevice>>* devices = MTLCopyAllDevices();
+    id<MTLDevice>   device  = nil;
+    for (id<MTLDevice> nextDevice in devices)
+    {
+        if (nextDevice.registryID == registryID)
+        {
+            device = nextDevice;
+        }
+    }
+    
+    id<MTLRenderPipelineState>  result  = nil;
+    if (device != nil)
+    {
+        MetalDeviceCacheItem*   newCacheItem    = [[[MetalDeviceCacheItem alloc] initWithDevice:device
+                                                                                    pixelFormat:pixFormat]
+                                                    autorelease];
+        if (newCacheItem != nil)
+        {
+            [deviceCaches addObject:newCacheItem];
+            result = newCacheItem.pipelineStateMask;
         }
     }
     [devices release];

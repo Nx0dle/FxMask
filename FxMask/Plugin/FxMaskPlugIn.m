@@ -11,8 +11,8 @@
 #import "MetalDeviceCache.h"
 
 typedef struct Shapes {
-    FxPoint2D   lowerLeft;
-    FxPoint2D   upperRight;
+    FxPoint2D   upperLeft;
+    FxPoint2D   lowerRight;
 } Shapes;
 
 @implementation FxMaskPlugIn
@@ -81,15 +81,15 @@ typedef struct Shapes {
     
     NSBundle *bundle = [NSBundle bundleForClass:[self class]];
     
-    [parmsApi addPointParameterWithName:[bundle localizedStringForKey:@"FxMask::Lower Left"
+    [parmsApi addPointParameterWithName:[bundle localizedStringForKey:@"Upper Left"
                                                                 value:nil
                                                                 table:nil]
                             parameterID:kLowerLeftID
-                               defaultX:0.25
-                               defaultY:0.25
+                               defaultX:0.5
+                               defaultY:0.5
                          parameterFlags:kFxParameterFlag_DEFAULT];
     
-    [parmsApi addPointParameterWithName:[bundle localizedStringForKey:@"FxMask::Upper Right"
+    [parmsApi addPointParameterWithName:[bundle localizedStringForKey:@"Lower Right"
                                                                 value:nil
                                                                 table:nil]
                             parameterID:kUpperRightID
@@ -135,17 +135,17 @@ typedef struct Shapes {
     }
     
     Shapes  shapeState  = {
-        { 0.0, 0.0 },
+        { 1.0, 1.0 },
         { 1.0, 1.0 }
     };
     
-    [paramGetAPI getXValue:&shapeState.lowerLeft.x
-                 YValue:&shapeState.lowerLeft.y
+    [paramGetAPI getXValue:&shapeState.upperLeft.x
+                 YValue:&shapeState.upperLeft.y
           fromParameter:kLowerLeftID
                  atTime:renderTime];
     
-    [paramGetAPI getXValue:&shapeState.upperRight.x
-                 YValue:&shapeState.upperRight.y
+    [paramGetAPI getXValue:&shapeState.lowerRight.x
+                 YValue:&shapeState.lowerRight.y
           fromParameter:kUpperRightID
                  atTime:renderTime];
     
@@ -199,10 +199,10 @@ typedef struct Shapes {
     
     // Union the various objects
     CGRect  imageBounds = CGRectMake(srcLowerLeft.x, srcLowerLeft.y, srcImageSize.width, srcImageSize.height);
-    CGRect  rectBounds  = CGRectMake(shapeState.lowerLeft.x * srcImageSize.width,
-                                     shapeState.lowerLeft.y * srcImageSize.height,
-                                     (shapeState.upperRight.x - shapeState.lowerLeft.x) * srcImageSize.width,
-                                     (shapeState.upperRight.y - shapeState.lowerLeft.y) * srcImageSize.height);
+    CGRect  rectBounds  = CGRectMake((shapeState.upperLeft.x) * srcImageSize.width,
+                                     (shapeState.upperLeft.y) * srcImageSize.height,
+                                     (shapeState.lowerRight.x - shapeState.upperLeft.x) * srcImageSize.width,
+                                     (shapeState.lowerRight.y - shapeState.upperLeft.y) * srcImageSize.height);
     rectBounds = CGRectOffset(rectBounds, srcLowerLeft.x, srcLowerLeft.y);
     
     imageBounds = CGRectUnion(imageBounds, rectBounds);
@@ -222,6 +222,27 @@ typedef struct Shapes {
     
     return YES;
 }
+
+//- (BOOL)parameterChanged:(UInt32)paramID atTime:(CMTime)time error:(NSError * _Nullable *)error
+//{
+//    id<FxParameterRetrievalAPI_v6>  paramGetAPI = [_apiManager apiForProtocol:@protocol(FxParameterRetrievalAPI_v6)];
+//    
+//    id<FxParameterSettingAPI_v6>  paramSetAPI = [_apiManager apiForProtocol:@protocol(FxParameterSettingAPI_v6)];
+//
+//    if (paramID == kLowerLeftID)
+//    {
+//        double tmpX, tmpY;
+//        [paramGetAPI getXValue:&tmpX YValue:&tmpY fromParameter:kLowerLeftID atTime:time];
+//        
+//        [paramSetAPI setXValue:tmpY YValue:tmpX toParameter:kUpperRightID atTime:time];
+//        
+//        
+//    }
+//    
+//    
+//    
+//    return YES;
+//}
 
 //---------------------------------------------------------
 // sourceTileRect:sourceImageIndex:sourceImages:destinationTileRect:destinationImage:pluginState:atTime:error
@@ -308,6 +329,8 @@ typedef struct Shapes {
     id<MTLTexture>  inputTexture    = [sourceImages[0] metalTextureForDevice:[deviceCache deviceWithRegistryID:sourceImages[0].deviceRegistryID]];
     id<MTLTexture>  outputTexture   = [destinationImage metalTextureForDevice:[deviceCache deviceWithRegistryID:destinationImage.deviceRegistryID]];
     
+    id<MTLTexture> firstPassTexture;
+    
     MTLRenderPassColorAttachmentDescriptor* colorAttachmentDescriptor   = [[MTLRenderPassColorAttachmentDescriptor alloc] init];
     colorAttachmentDescriptor.texture = outputTexture;
     colorAttachmentDescriptor.clearColor = MTLClearColorMake(1.0, 0.5, 0.0, 1.0);
@@ -331,30 +354,65 @@ typedef struct Shapes {
     };
     [commandEncoder setViewport:viewport];
     
-    id<MTLRenderPipelineState>  pipelineState  = [deviceCache pipelineStateWithRegistryID:sourceImages[0].deviceRegistryID
-                                                                              pixelFormat:pixelFormat];
-    [commandEncoder setRenderPipelineState:pipelineState];
+    {
+        id<MTLRenderPipelineState>  pipelineState  = [deviceCache pipelineStateWithRegistryID:sourceImages[0].deviceRegistryID pixelFormat:pixelFormat];
+        [commandEncoder setRenderPipelineState:pipelineState];
+        
+        [commandEncoder setVertexBytes:vertices
+                                length:sizeof(vertices)
+                               atIndex:BVI_Vertices];
+        
+        simd_uint2  viewportSize = {
+            (unsigned int)(outputWidth),
+            (unsigned int)(outputHeight)
+        };
+        [commandEncoder setVertexBytes:&viewportSize
+                                length:sizeof(viewportSize)
+                               atIndex:BVI_ViewportSize];
+        
+        [commandEncoder setFragmentTexture:inputTexture
+                                   atIndex:BTI_InputImage];
+        
+        [commandEncoder drawPrimitives:MTLPrimitiveTypeTriangleStrip
+                           vertexStart:0
+                           vertexCount:4];
+    }
     
-    [commandEncoder setVertexBytes:vertices
-                            length:sizeof(vertices)
-                           atIndex:BVI_Vertices];
+    {
+        id<MTLRenderPipelineState>  pipelineStateShape  = [deviceCache maskPipelineStateWithRegistryID:sourceImages[0].deviceRegistryID pixelFormat:pixelFormat];
+        [commandEncoder setRenderPipelineState:pipelineStateShape];
+        
+        // Mask vertices and default texCoords
+        Vertex2D quadVertices[] = {
+            {{  (shapeState.upperLeft.x),   (shapeState.upperLeft.y)},  {0.0, 1.0}},
+            {{  (shapeState.upperLeft.x),   (shapeState.lowerRight.y)}, {0.0, 0.0}},
+            {{  (shapeState.lowerRight.x),  (shapeState.upperLeft.y)},  {1.0, 1.0}},
+            {{  (shapeState.lowerRight.x),  (shapeState.lowerRight.y)}, {1.0, 0.0}}
+        };
+        
+        [commandEncoder setVertexBytes:quadVertices
+                                length:sizeof(quadVertices)
+                               atIndex:2];
+        
+        simd_uint2  viewportSize = {
+            (unsigned int)(outputWidth),
+            (unsigned int)(outputHeight)
+        };
+        
+        [commandEncoder setFragmentBytes:&viewportSize
+                                length:sizeof(viewportSize)
+                               atIndex:BVI_ViewportSize];
+        
+        [commandEncoder setFragmentTexture:inputTexture
+                                   atIndex:BTI_InputImage];
+        
+        [commandEncoder drawPrimitives:MTLPrimitiveTypeTriangleStrip
+                           vertexStart:0
+                           vertexCount:4];
+        
+        [commandEncoder endEncoding];
+    }
     
-    simd_uint2  viewportSize = {
-        (unsigned int)(outputWidth),
-        (unsigned int)(outputHeight)
-    };
-    [commandEncoder setVertexBytes:&viewportSize
-                            length:sizeof(viewportSize)
-                           atIndex:BVI_ViewportSize];
-    
-    [commandEncoder setFragmentTexture:inputTexture
-                               atIndex:BTI_InputImage];
-    
-    [commandEncoder drawPrimitives:MTLPrimitiveTypeTriangleStrip
-                       vertexStart:0
-                       vertexCount:4];
-    
-    [commandEncoder endEncoding];
     [commandBuffer commit];
     
     [commandBuffer waitUntilCompleted];

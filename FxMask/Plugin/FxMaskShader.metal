@@ -14,16 +14,13 @@ using namespace metal;
 
 typedef struct
 {
-    // The [[position]] attribute of this member indicates that this value is the clip space
-    // position of the vertex when this structure is returned from the vertex function
     float4 clipSpacePosition [[position]];
-    
-    // Since this member does not have a special attribute, the rasterizer interpolates
-    // its value with the values of the other triangle vertices and then passes
-    // the interpolated value to the fragment shader for each fragment in the triangle
     float2 textureCoordinate;
     
 } RasterizerData;
+
+#pragma mark -
+#pragma mark Viewport shaders
 
 vertex RasterizerData
 vertexShader(uint vertexID [[vertex_id]],
@@ -77,6 +74,96 @@ fragment float4 fragmentShader(RasterizerData in [[stage_in]],
     const half4 sample = colorTexture.sample(textureSampler, in.textureCoordinate);
     float4 result = float4(sample);
 
-    // We return the color of the texture
     return result;
 }
+
+#pragma mark -
+#pragma mark Mask shaders
+
+vertex RasterizerData
+maskVertexShader(uint vertexID [[vertex_id]],
+             constant Vertex2D *vertexArray [[buffer(2)]],
+             constant vector_uint2 *viewportSizePointer [[buffer(BVI_ViewportSize)]])
+{
+    RasterizerData out;
+    
+    // Set texture coordinates as vertex positions
+    out.textureCoordinate = vertexArray[vertexID].position.xy;
+    
+    // Convert vertex positions from (0,1) to (-1,1)
+    out.clipSpacePosition = float4(vertexArray[vertexID].position * 2 - 1, 0.0, 1.0);
+    
+    // Reverse Y axis
+    out.clipSpacePosition.y *= -1;
+    
+    return out;
+}
+
+fragment float4 maskFragmentShader(RasterizerData in [[stage_in]],
+                               texture2d<half> colorTexture [[ texture(BTI_InputImage) ]],
+                               constant float* brightness [[ buffer(BFI_Brightness) ]],
+                                constant vector_uint2 *viewportSizePointer [[buffer(BVI_ViewportSize)]])
+{
+    constexpr sampler textureSampler (mag_filter::linear,
+                                      min_filter::linear);
+    
+    // Sample the texture to obtain a color
+    const half4 sample = colorTexture.sample(textureSampler, in.textureCoordinate);
+    float4 result = float4(sample);
+
+    // We return the color of the texture
+    return 1 - result;
+}
+
+// Gauss blur shaders
+//fragment float4 textureFirstGaussShader(TexturePipelineRasterizerData in      [[stage_in]],
+//                                      texture2d<float>              texture [[texture(0)]])
+//{
+//    sampler simpleSampler(mip_filter::linear,
+//                          mag_filter::linear,
+//                          min_filter::linear,
+//                          address::mirrored_repeat);
+//
+//    // Sample data from the texture.
+//    float4 colorSample;
+//
+//    float4 color = float4(0.0);
+//    float sigma = 10.0, radius = 3.0 * sigma, weightSum = 0.0, x = 0.0;
+//
+//    for (int y = -radius; y <= radius; y++) {
+//        float2 offset = float2(y, x) / float2(texture.get_height(), texture.get_width());
+//        float weight = exp(-(y * y) / (2.0 * sigma * sigma));
+//        color += texture.sample(simpleSampler, in.texcoord.xy + offset) * weight;
+//        weightSum += weight;
+//    }
+//
+//    colorSample = color / weightSum;
+//
+//    return colorSample;
+//}
+//
+//fragment float4 textureSecondGaussShader(TexturePipelineRasterizerData in      [[stage_in]],
+//                                      texture2d<float>              texture [[texture(1)]])
+//{
+//    sampler simpleSampler(mip_filter::linear,
+//                          mag_filter::linear,
+//                          min_filter::linear,
+//                          address::mirrored_repeat);
+//
+//    // Sample data from the texture.
+//    float4 colorSample;
+//
+//    float4 color = float4(0.0);
+//    float sigma = 10.0, radius = 3.0 * sigma, weightSum = 0.0, y = 0.0;
+//
+//    for (int x = -radius; x <= radius; x++) {
+//        float2 offset = float2(y, x) / float2(texture.get_height(), texture.get_width());
+//        float weight = exp(-(x * x) / (2.0 * sigma * sigma));
+//        color += texture.sample(simpleSampler, in.texcoord.xy + offset) * weight;
+//        weightSum += weight;
+//    }
+//
+//    colorSample = color / weightSum;
+//
+//    return colorSample;
+//}

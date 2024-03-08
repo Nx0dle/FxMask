@@ -13,8 +13,6 @@
 enum {
     kLowerLeftID    = 1,
     kUpperRightID   = 2,
-    kCircleCenter   = 3,
-    kCircleRadius   = 4
 };
 
 typedef enum BrightnessVertexInputIndex {
@@ -36,7 +34,8 @@ typedef struct Vertex2D {
 } Vertex2D;
 
 typedef struct ShapeVertex {
-    vector_float2   position;
+    vector_float2 position;
+    vector_float4 color;
 } ShapeVertex;
 
 #endif
